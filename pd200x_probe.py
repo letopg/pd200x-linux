@@ -5,9 +5,9 @@ https://git.reiners.io/justin/dgm20-linux/PROTOCOL.md
 
 Only sends type 4 (read one) and type 6 (range read). Never writes.
 
-  sudo python3 pd200x_probe.py            # find device, dump descriptor, read identity
-  sudo python3 pd200x_probe.py scan       # also read every register 0x2000-0x20FF
-  sudo python3 pd200x_probe.py listen     # print unsolicited packets (turn knobs / press buttons)
+  python3 pd200x_probe.py                 # find device, dump descriptor, read identity
+  python3 pd200x_probe.py scan            # also read every register 0x2000-0x20FF
+  python3 pd200x_probe.py listen          # print unsolicited packets (turn knobs / press buttons)
 """
 import glob, os, select, struct, sys, time
 

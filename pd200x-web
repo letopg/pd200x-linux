@@ -105,6 +105,8 @@ td input[type=number] { width: 100%; min-width: 0; font: inherit; color: var(--t
   <div class="row"><label class="name" for="brightness">Brightness</label>
     <input type="range" id="brightness" min="0" max="100" step="1" data-key="brightness"><span class="val" id="brightness-v"></span></div>
   <div class="row"><label class="name">Colour</label><div class="swatches" id="swatches"></div></div>
+  <div class="row"><label class="name" title="Lights off while muted. The mic doesn't report this setting.">Off when muted</label>
+    <button class="toggle" data-linkage="on">on</button><button class="toggle" data-linkage="off">off</button></div>
 </section>
 
 <section>
@@ -115,6 +117,9 @@ td input[type=number] { width: 100%; min-width: 0; font: inherit; color: var(--t
   <div class="row"><label class="name">Limiter</label><button class="toggle" data-key="limiter"></button></div>
   <div class="row"><label class="name" for="limiter-threshold">Threshold</label>
     <input type="range" id="limiter-threshold" min="-60" max="0" step="0.5" data-key="limiter-threshold"><span class="val" id="limiter-threshold-v"></span></div>
+  <div class="row"><label class="name">Noise cancel</label><button class="toggle" data-key="noise-cancel"></button></div>
+  <div class="row"><label class="name" for="noise-cancel-level">Level</label>
+    <input type="range" id="noise-cancel-level" min="0" max="40" step="1" data-key="noise-cancel-level"><span class="val" id="noise-cancel-level-v"></span></div>
 </section>
 
 <section>
@@ -165,6 +170,7 @@ function render(s) {
   document.querySelectorAll(".swatch").forEach(w => w.classList.toggle("sel", +w.dataset.idx === s.light.colour));
   setToggle("compressor", s.compressor.on); setSlider("compressor-threshold", s.compressor.threshold_db, fmtDb);
   setToggle("limiter", s.limiter.on); setSlider("limiter-threshold", s.limiter.threshold_db, fmtDb);
+  setToggle("noise-cancel", s.noise_cancel.on); setSlider("noise-cancel-level", s.noise_cancel.level);
   const tb = $("#eq");
   if (!s.eq) { tb.innerHTML = '<tr><td colspan="6">EQ not readable (needs firmware 1.2.x)</td></tr>'; return; }
   if (!tb.children.length || tb.children.length !== s.eq.length) {
@@ -196,9 +202,10 @@ async function refresh() {
   try { render(await api("/api/status")); showErr(""); } catch (e) { showErr(e.message); }
 }
 async function change(path, body) {
-  busy = true;
-  try { await api(path, body); showErr(""); } catch (e) { showErr(e.message); }
+  busy = true; let ok = false;
+  try { await api(path, body); showErr(""); ok = true; } catch (e) { showErr(e.message); }
   busy = false; refresh();
+  return ok;
 }
 
 document.querySelectorAll("button.toggle[data-key]").forEach(b =>
@@ -208,6 +215,12 @@ document.querySelectorAll('input[type=range][data-key]').forEach(el => {
   el.addEventListener("input", () => document.getElementById(key + "-v").textContent = db ? fmtDb(el.value) : el.value);
   el.addEventListener("change", () => change("/api/set", {key, value: el.value}));
 });
+// The mic doesn't report light linkage, so highlight whichever value was last set from this page.
+document.querySelectorAll("button[data-linkage]").forEach(b =>
+  b.addEventListener("click", async () => {
+    if (await change("/api/set", {key: "light-linkage", value: b.dataset.linkage}))
+      document.querySelectorAll("button[data-linkage]").forEach(o => o.classList.toggle("on", o === b));
+  }));
 Object.keys(SWATCH).forEach((name, idx) => {
   const w = document.createElement("button");
   w.className = "swatch"; w.dataset.idx = idx; w.title = name; w.setAttribute("aria-label", name);

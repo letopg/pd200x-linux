@@ -14,6 +14,9 @@
   pd200xctl set compressor-threshold DB  (-60..0)
   pd200xctl set limiter on|off
   pd200xctl set limiter-threshold DB     (-60..0)
+  pd200xctl set noise-cancel on|off
+  pd200xctl set noise-cancel-level 0-40
+  pd200xctl set light-linkage on|off    (lights off while muted; can't be read back)
   pd200xctl eq BAND [--on|--off] [--freq HZ] [--gain DB] [--q Q]
                                         BAND = 1-5, hpf or lpf
 """
@@ -45,6 +48,8 @@ def cmd_status(dev, args):
         c = s[name]
         thr = "?" if c["threshold_db"] is None else f"{c['threshold_db']:+.1f} dB"
         print(f"{name:11s} {onoff(c['on'])}, threshold {thr}")
+    nc = s["noise_cancel"]
+    print(f"noise cancel {onoff(nc['on'])}, level {'?' if nc['level'] is None else nc['level']}")
     if s["eq"] is None:
         print("eq          not readable (needs firmware 1.2.x)")
     else:

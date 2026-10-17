@@ -2,7 +2,7 @@
 
 Framing is the DGM20 one on HID report 0x4B (same id both directions):
   4B C4 len 00 00 type payload(u16 LE words) csum(u16 LE), zero-padded to 64 bytes.
-See CLAUDE.md for the register map. This module only reads for now.
+See PROTOCOL.md for the register map.
 """
 import fcntl
 import glob
@@ -26,9 +26,13 @@ EQ_TYPES = {0: "peak", 1: "low-pass", 2: "high-pass", 3: "low-shelf?", 4: "high-
 COLOURS = {0: "white", 1: "red", 2: "orange", 3: "yellow", 4: "green", 5: "cyan", 6: "blue",
            7: "pink", 8: "rgb-wave", 9: "rgb-static"}  # confirmed by eye; 10 looks like 9
 
-# Registers we may write: confirmed meaning only (see CLAUDE.md). Anything else is refused,
+# Registers we may write: confirmed meaning only (see PROTOCOL.md). Anything else is refused,
 # which also keeps out 0x1008 (DFU) and 0x100A (factory reset). Type 5 is never sent.
-WRITABLE = {0x2022, 0x2023, 0x2030, 0x2026, 0x2027, 0x202C, 0x202D, 0x2031, 0x2036, 0x2037, 0x2038}
+WRITABLE = {0x2022, 0x2023, 0x2030, 0x2026, 0x2027, 0x202C, 0x202D, 0x2031, 0x2036, 0x2037, 0x2038,
+            0x2039, 0x203A, 0x203B}
+# Acked but the read doesn't return what was written (0x2039 reads 16 after writing 0), so only
+# the ack is checked.
+NO_READBACK = {0x2039}
 WRITABLE |= {base + i for _, base in EQ_BANDS for i in range(5)}
 
 
@@ -137,6 +141,8 @@ class PD200X:
         if ack[0] != 0:
             raise DeviceError(f"mic rejected write (status {ack[0]})")
         for addr, value in pairs:
+            if addr in NO_READBACK:
+                continue
             got = self.read(addr)
             if got != value:
                 raise DeviceError(f"{addr:#06x} reads {got} after writing {value}")
@@ -206,6 +212,9 @@ SETTINGS = {
     "compressor-threshold": (0x2027, parse_db),
     "limiter": (0x202C, lambda v: int(parse_bool(v))),
     "limiter-threshold": (0x202D, parse_db),
+    "noise-cancel": (0x203A, lambda v: int(parse_bool(v))),
+    "noise-cancel-level": (0x203B, lambda v: (parse_int(0, 40)(v) + 120) * 10),  # app slider 0-40
+    "light-linkage": (0x2039, lambda v: int(parse_bool(v))),  # LEDs off while muted; write-only
 }
 
 BAND_NAMES = {"1": 0, "2": 1, "3": 2, "4": 3, "5": 4, "hpf": 5, "lpf": 6}
@@ -264,6 +273,8 @@ def decode(regs):
                        "threshold_db": None if g(0x2027) is None else db(g(0x2027))},
         "limiter": {"on": None if g(0x202C) is None else bool(g(0x202C)),
                     "threshold_db": None if g(0x202D) is None else db(g(0x202D))},
+        "noise_cancel": {"on": None if g(0x203A) is None else bool(g(0x203A)),
+                         "level": None if g(0x203B) is None else g(0x203B) // 10 - 120},
         "eq": None,
     }
     if all(g(base + i) is not None for _, base in EQ_BANDS for i in range(5)):
