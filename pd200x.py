@@ -28,7 +28,7 @@ COLOURS = {0: "white", 1: "red", 2: "orange", 3: "yellow", 4: "green", 5: "cyan"
 
 # Registers we may write: confirmed meaning only (see CLAUDE.md). Anything else is refused,
 # which also keeps out 0x1008 (DFU) and 0x100A (factory reset). Type 5 is never sent.
-WRITABLE = {0x2022, 0x2023, 0x2026, 0x2027, 0x202C, 0x202D, 0x2031, 0x2036, 0x2037, 0x2038}
+WRITABLE = {0x2022, 0x2023, 0x2030, 0x2026, 0x2027, 0x202C, 0x202D, 0x2031, 0x2036, 0x2037, 0x2038}
 WRITABLE |= {base + i for _, base in EQ_BANDS for i in range(5)}
 
 
@@ -197,7 +197,8 @@ def parse_colour(v):
 SETTINGS = {
     "mute": (0x2022, lambda v: int(parse_bool(v))),
     "monitor": (0x2031, lambda v: 2000 if parse_bool(v) else 3000),
-    "mic-volume": (0x2023, parse_int(0, 100)),  # knob in blue-LED mode
+    "mic-volume": (0x2023, parse_int(0, 100)),        # knob with green LED
+    "headphone-volume": (0x2030, parse_int(0, 100)),  # knob with blue LED (short press toggles)
     "light": (0x2036, lambda v: int(parse_bool(v))),
     "brightness": (0x2037, parse_int(0, 100)),
     "colour": (0x2038, parse_colour),
@@ -256,7 +257,7 @@ def decode(regs):
         "mute": None if g(0x2022) is None else bool(g(0x2022)),
         "monitoring": {2000: True, 3000: False}.get(g(0x2031)),
         "mic_volume": g(0x2023),
-        "reg_2030": g(0x2030),
+        "headphone_volume": g(0x2030),
         "light": {"on": None if g(0x2036) is None else bool(g(0x2036)),
                   "brightness": g(0x2037), "colour": g(0x2038)},
         "compressor": {"on": None if g(0x2026) is None else bool(g(0x2026)),

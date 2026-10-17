@@ -6,6 +6,7 @@
   pd200xctl set mute on|off
   pd200xctl set monitor on|off
   pd200xctl set mic-volume 0-100
+  pd200xctl set headphone-volume 0-100
   pd200xctl set light on|off
   pd200xctl set brightness 0-100
   pd200xctl set colour white|red|orange|yellow|green|cyan|blue|pink|rgb-wave|rgb-static
@@ -35,8 +36,8 @@ def cmd_status(dev, args):
     print(f"{ident['model']}  firmware {ident['firmware']}  serial {ident['serial']}  ({dev.path})")
     print(f"mute        {'muted' if s['mute'] else 'live' if s['mute'] is not None else '?'}")
     print(f"monitoring  {onoff(s['monitoring'])}")
-    print(f"mic volume  {s['mic_volume']}  (knob, blue LED)")
-    print(f"0x2030      {s['reg_2030']}  (headphone volume? unconfirmed)")
+    print(f"mic volume  {s['mic_volume']}  (knob, green LED)")
+    print(f"headphones  {s['headphone_volume']}  (knob, blue LED)")
     lt = s["light"]
     colour = pd200x.COLOURS.get(lt["colour"], f"index {lt['colour']}")
     print(f"light       {onoff(lt['on'])}, brightness {lt['brightness']}, colour {colour}")

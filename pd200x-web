@@ -91,6 +91,8 @@ td input[type=number] { width: 100%; min-width: 0; font: inherit; color: var(--t
   <div class="row"><label class="name">Monitoring</label><button class="toggle" data-key="monitor"></button></div>
   <div class="row"><label class="name" for="mic-volume">Mic volume</label>
     <input type="range" id="mic-volume" min="0" max="100" step="1" data-key="mic-volume"><span class="val" id="mic-volume-v"></span></div>
+  <div class="row"><label class="name" for="headphone-volume">Headphones</label>
+    <input type="range" id="headphone-volume" min="0" max="100" step="1" data-key="headphone-volume"><span class="val" id="headphone-volume-v"></span></div>
   <div class="row"><label class="name">Level</label>
     <div class="meter" role="meter" aria-label="Input level" aria-valuemin="-60" aria-valuemax="0">
       <div class="fill" id="meter-fill"></div><div class="peak" id="meter-peak"></div></div>
@@ -158,7 +160,7 @@ const fmtDb = v => (v > 0 ? "+" : "") + Number(v).toFixed(1) + " dB";
 function render(s) {
   $("#ident").textContent = `${s.identity.model} · firmware ${s.identity.firmware} · ${s.path}`;
   setToggle("mute", s.mute); setToggle("monitor", s.monitoring);
-  setSlider("mic-volume", s.mic_volume);
+  setSlider("mic-volume", s.mic_volume); setSlider("headphone-volume", s.headphone_volume);
   setToggle("light", s.light.on); setSlider("brightness", s.light.brightness);
   document.querySelectorAll(".swatch").forEach(w => w.classList.toggle("sel", +w.dataset.idx === s.light.colour));
   setToggle("compressor", s.compressor.on); setSlider("compressor-threshold", s.compressor.threshold_db, fmtDb);
