@@ -1,0 +1,291 @@
+#!/usr/bin/env python3
+"""pd200x-web - local web UI for the Maono PD200X.
+
+  pd200x-web [--port 8200]     then open http://127.0.0.1:8200/
+
+Listens on 127.0.0.1 only. API:
+  GET  /api/status                       identity + decoded settings
+  POST /api/set  {"key": K, "value": V}  same keys and values as `pd200xctl set`
+  POST /api/eq   {"band": B, "on"?, "freq"?, "gain"?, "q"?}
+"""
+import argparse
+import json
+import os
+import sys
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import pd200x  # noqa: E402
+
+PAGE = r"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PD200X Control</title>
+<style>
+:root {
+  --bg: #f6f6f4; --card: #ffffff; --text: #1d1d1f; --muted: #6b6b70; --line: #e2e2e0;
+  --accent: #2f6fe4; --accent-text: #ffffff; --bad: #c62828; --off: #c9c9c9;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #151517; --card: #1f1f22; --text: #ececee; --muted: #9a9aa2; --line: #333338;
+    --accent: #5b8ff0; --accent-text: #0d0d0f; --bad: #ef6b6b; --off: #4a4a50;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 15px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 760px; margin: 0 auto; padding: 20px 16px 40px; }
+header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  flex-wrap: wrap; margin-bottom: 16px; }
+h1 { font-size: 20px; margin: 0; }
+#ident { color: var(--muted); font-size: 13px; }
+#err { display: none; background: var(--bad); color: #fff; padding: 8px 12px; border-radius: 8px;
+  margin-bottom: 12px; }
+section { background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+  padding: 14px 16px; margin-bottom: 12px; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+  margin: 0 0 10px; font-weight: 600; }
+.row { display: flex; align-items: center; gap: 12px; min-height: 36px; }
+.row + .row { border-top: 1px solid var(--line); }
+.row label.name { flex: 0 0 120px; }
+.row input[type=range] { flex: 1; min-width: 0; accent-color: var(--accent); }
+.val { flex: 0 0 72px; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+button.toggle { flex: 0 0 auto; border: 0; border-radius: 999px; padding: 6px 14px; cursor: pointer;
+  background: var(--off); color: var(--text); font: inherit; min-width: 64px; }
+button.toggle.on { background: var(--accent); color: var(--accent-text); }
+.swatches { display: flex; flex-wrap: wrap; gap: 8px; }
+.swatch { width: 34px; height: 34px; border-radius: 50%; border: 2px solid var(--line); cursor: pointer;
+  padding: 0; }
+.swatch.sel { outline: 3px solid var(--accent); outline-offset: 2px; }
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; padding: 4px; }
+td { padding: 4px; border-top: 1px solid var(--line); }
+td input[type=number] { width: 100%; min-width: 0; font: inherit; color: var(--text);
+  background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; }
+.eqwrap { overflow-x: auto; }
+.note { color: var(--muted); font-size: 12px; margin-top: 8px; }
+</style>
+</head>
+<body>
+<main>
+<header><h1>PD200X Control</h1><span id="ident">connecting…</span></header>
+<div id="err"></div>
+
+<section>
+  <h2>Microphone</h2>
+  <div class="row"><label class="name">Mute</label><button class="toggle" data-key="mute"></button></div>
+  <div class="row"><label class="name">Monitoring</label><button class="toggle" data-key="monitor"></button></div>
+  <div class="row"><label class="name" for="volume">Volume</label>
+    <input type="range" id="volume" min="0" max="100" step="1" data-key="volume"><span class="val" id="volume-v"></span></div>
+</section>
+
+<section>
+  <h2>Light</h2>
+  <div class="row"><label class="name">Ring light</label><button class="toggle" data-key="light"></button></div>
+  <div class="row"><label class="name" for="brightness">Brightness</label>
+    <input type="range" id="brightness" min="0" max="100" step="1" data-key="brightness"><span class="val" id="brightness-v"></span></div>
+  <div class="row"><label class="name">Colour</label><div class="swatches" id="swatches"></div></div>
+</section>
+
+<section>
+  <h2>Dynamics</h2>
+  <div class="row"><label class="name">Compressor</label><button class="toggle" data-key="compressor"></button></div>
+  <div class="row"><label class="name" for="compressor-threshold">Threshold</label>
+    <input type="range" id="compressor-threshold" min="-60" max="0" step="0.5" data-key="compressor-threshold"><span class="val" id="compressor-threshold-v"></span></div>
+  <div class="row"><label class="name">Limiter</label><button class="toggle" data-key="limiter"></button></div>
+  <div class="row"><label class="name" for="limiter-threshold">Threshold</label>
+    <input type="range" id="limiter-threshold" min="-60" max="0" step="0.5" data-key="limiter-threshold"><span class="val" id="limiter-threshold-v"></span></div>
+</section>
+
+<section>
+  <h2>Equaliser</h2>
+  <div class="eqwrap"><table>
+    <thead><tr><th>Band</th><th>On</th><th>Type</th><th>Freq (Hz)</th><th>Gain (dB)</th><th>Q</th></tr></thead>
+    <tbody id="eq"></tbody>
+  </table></div>
+  <p class="note">Changes are sent when you leave a field or press Enter.</p>
+</section>
+</main>
+
+<script>
+const SWATCH = {white:"#ffffff", red:"#e53935", orange:"#fb8c00", yellow:"#fdd835", green:"#43a047",
+  cyan:"#00bcd4", blue:"#1e63e9", pink:"#ec4fa6",
+  "rgb-wave":"conic-gradient(red, yellow, lime, cyan, blue, magenta, red)",
+  "rgb-static":"linear-gradient(135deg, red, lime, blue)"};
+const BANDS = ["1","2","3","4","5","hpf","lpf"];
+const $ = s => document.querySelector(s);
+let busy = false;
+
+function showErr(msg) { const e = $("#err"); e.textContent = msg || ""; e.style.display = msg ? "block" : "none"; }
+
+async function api(path, body) {
+  const r = await fetch(path, body ? {method: "POST", headers: {"Content-Type": "application/json"},
+                                      body: JSON.stringify(body)} : {});
+  const j = await r.json().catch(() => ({error: r.statusText}));
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+
+function setToggle(key, on) {
+  const b = document.querySelector(`button[data-key="${key}"]`);
+  b.classList.toggle("on", !!on); b.textContent = on ? "on" : "off"; b.dataset.on = on ? "1" : "0";
+}
+function setSlider(key, v, fmt) {
+  const el = document.getElementById(key); if (v === null || v === undefined) return;
+  if (document.activeElement !== el) el.value = v;
+  document.getElementById(key + "-v").textContent = fmt ? fmt(v) : v;
+}
+const fmtDb = v => (v > 0 ? "+" : "") + Number(v).toFixed(1) + " dB";
+
+function render(s) {
+  $("#ident").textContent = `${s.identity.model} · firmware ${s.identity.firmware} · ${s.path}`;
+  setToggle("mute", s.mute); setToggle("monitor", s.monitoring);
+  setSlider("volume", s.volume);
+  setToggle("light", s.light.on); setSlider("brightness", s.light.brightness);
+  document.querySelectorAll(".swatch").forEach(w => w.classList.toggle("sel", +w.dataset.idx === s.light.colour));
+  setToggle("compressor", s.compressor.on); setSlider("compressor-threshold", s.compressor.threshold_db, fmtDb);
+  setToggle("limiter", s.limiter.on); setSlider("limiter-threshold", s.limiter.threshold_db, fmtDb);
+  const tb = $("#eq");
+  if (!s.eq) { tb.innerHTML = '<tr><td colspan="6">EQ not readable (needs firmware 1.2.x)</td></tr>'; return; }
+  if (!tb.children.length || tb.children.length !== s.eq.length) {
+    tb.innerHTML = "";
+    s.eq.forEach((b, i) => {
+      const filt = b.type === "low-pass" || b.type === "high-pass";
+      const tr = document.createElement("tr"); tr.dataset.band = BANDS[i];
+      tr.innerHTML = `<td>${b.name}</td>
+        <td><button class="toggle" data-field="on"></button></td>
+        <td>${b.type}</td>
+        <td><input type="number" data-field="freq" min="20" max="22000" step="1"></td>
+        <td>${filt ? "" : '<input type="number" data-field="gain" min="-12" max="12" step="0.5">'}</td>
+        <td><input type="number" data-field="q" min="0.1" max="10" step="0.05"></td>`;
+      tb.appendChild(tr);
+    });
+  }
+  s.eq.forEach((b, i) => {
+    const tr = tb.children[i];
+    const t = tr.querySelector('[data-field="on"]');
+    t.classList.toggle("on", b.on); t.textContent = b.on ? "on" : "off"; t.dataset.on = b.on ? "1" : "0";
+    const put = (f, v) => { const el = tr.querySelector(`[data-field="${f}"]`);
+      if (el && document.activeElement !== el) el.value = v; };
+    put("freq", b.freq_hz); put("gain", b.gain_db); put("q", b.q.toFixed(2));
+  });
+}
+
+async function refresh() {
+  if (busy) return;
+  try { render(await api("/api/status")); showErr(""); } catch (e) { showErr(e.message); }
+}
+async function change(path, body) {
+  busy = true;
+  try { await api(path, body); showErr(""); } catch (e) { showErr(e.message); }
+  busy = false; refresh();
+}
+
+document.querySelectorAll("button.toggle[data-key]").forEach(b =>
+  b.addEventListener("click", () => change("/api/set", {key: b.dataset.key, value: b.dataset.on === "1" ? "off" : "on"})));
+document.querySelectorAll('input[type=range][data-key]').forEach(el => {
+  const key = el.dataset.key, db = key.endsWith("threshold");
+  el.addEventListener("input", () => document.getElementById(key + "-v").textContent = db ? fmtDb(el.value) : el.value);
+  el.addEventListener("change", () => change("/api/set", {key, value: el.value}));
+});
+Object.keys(SWATCH).forEach((name, idx) => {
+  const w = document.createElement("button");
+  w.className = "swatch"; w.dataset.idx = idx; w.title = name; w.setAttribute("aria-label", name);
+  w.style.background = SWATCH[name];
+  w.addEventListener("click", () => change("/api/set", {key: "colour", value: name}));
+  $("#swatches").appendChild(w);
+});
+$("#eq").addEventListener("click", e => {
+  const t = e.target.closest('button[data-field="on"]'); if (!t) return;
+  change("/api/eq", {band: t.closest("tr").dataset.band, on: t.dataset.on !== "1"});
+});
+$("#eq").addEventListener("change", e => {
+  const el = e.target; if (!el.dataset.field || el.value === "") return;
+  change("/api/eq", {band: el.closest("tr").dataset.band, [el.dataset.field]: Number(el.value)});
+});
+
+refresh(); setInterval(refresh, 2000);
+</script>
+</body>
+</html>
+"""
+
+
+class Handler(BaseHTTPRequestHandler):
+    device = None  # --device override
+
+    def log_message(self, fmt, *args):
+        pass
+
+    def _send(self, code, body, ctype="application/json"):
+        data = body.encode() if isinstance(body, str) else json.dumps(body).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _host_ok(self):
+        host = (self.headers.get("Host") or "").rsplit(":", 1)[0]
+        return host in ("127.0.0.1", "localhost")
+
+    def _with_device(self, fn):
+        try:
+            with pd200x.PD200X(self.device) as dev:
+                return self._send(200, fn(dev))
+        except ValueError as e:
+            return self._send(400, {"error": str(e)})
+        except (pd200x.DeviceError, OSError) as e:
+            return self._send(503, {"error": str(e)})
+
+    def do_GET(self):
+        if not self._host_ok():
+            return self._send(403, {"error": "bad host"})
+        if self.path == "/":
+            return self._send(200, PAGE, "text/html; charset=utf-8")
+        if self.path == "/api/status":
+            def status(dev):
+                s = pd200x.decode(dev.read_block(pd200x.REG_FIRST, pd200x.REG_LAST))
+                s["identity"] = dev.identity()
+                s["path"] = dev.path
+                return s
+            return self._with_device(status)
+        self._send(404, {"error": "not found"})
+
+    def do_POST(self):
+        if not self._host_ok():
+            return self._send(403, {"error": "bad host"})
+        if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
+            return self._send(415, {"error": "expected application/json"})
+        try:
+            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+        except ValueError:
+            return self._send(400, {"error": "bad json"})
+        if self.path == "/api/set":
+            return self._with_device(lambda dev: pd200x.set_setting(dev, body.get("key"), body.get("value")) or {"ok": True})
+        if self.path == "/api/eq":
+            fields = {k: body.get(k) for k in ("on", "freq", "gain", "q")}
+            return self._with_device(lambda dev: pd200x.set_band(dev, str(body.get("band")), **fields) and {"ok": True})
+        self._send(404, {"error": "not found"})
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="pd200x-web", description="Local web UI for the Maono PD200X")
+    ap.add_argument("--port", type=int, default=8200)
+    ap.add_argument("--device", help="hidraw node (default: auto-detect)")
+    args = ap.parse_args()
+    Handler.device = args.device
+    srv = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+    print(f"pd200x-web: http://127.0.0.1:{args.port}/  (Ctrl-C to stop)")
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,3 @@
+# Maono PD200X: let the logged-in user talk to the vendor HID interface (pd200xctl).
+# 70- so that uaccess is set before 73-seat-late.rules applies it.
+KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="352f", ATTRS{idProduct}=="0104", TAG+="uaccess"

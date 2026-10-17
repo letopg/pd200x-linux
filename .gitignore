@@ -1,0 +1,6 @@
+# reverse-engineering workspace: Ghidra, extracted Maono DLLs, decompiled code, test recordings
+re/
+# vendor installer and USB captures (large / proprietary / contain device serial)
+*.exe
+*.pcapng
+__pycache__/

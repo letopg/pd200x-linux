@@ -1,0 +1,100 @@
+#!/usr/bin/env python3
+"""pd200xctl - control the Maono PD200X USB mic.
+
+  pd200xctl status                      show current settings
+  pd200xctl status --raw                also dump every readable register
+  pd200xctl set mute on|off
+  pd200xctl set monitor on|off
+  pd200xctl set volume 0-100
+  pd200xctl set light on|off
+  pd200xctl set brightness 0-100
+  pd200xctl set colour white|red|orange|yellow|green|cyan|blue|pink|rgb-wave|rgb-static
+  pd200xctl set compressor on|off
+  pd200xctl set compressor-threshold DB  (-60..0)
+  pd200xctl set limiter on|off
+  pd200xctl set limiter-threshold DB     (-60..0)
+  pd200xctl eq BAND [--on|--off] [--freq HZ] [--gain DB] [--q Q]
+                                        BAND = 1-5, hpf or lpf
+"""
+import argparse
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import pd200x  # noqa: E402
+
+
+def onoff(v):
+    return "?" if v is None else ("on" if v else "off")
+
+
+def cmd_status(dev, args):
+    ident = dev.identity()
+    regs = dev.read_block(pd200x.REG_FIRST, pd200x.REG_LAST)
+    s = pd200x.decode(regs)
+    print(f"{ident['model']}  firmware {ident['firmware']}  serial {ident['serial']}  ({dev.path})")
+    print(f"mute        {'muted' if s['mute'] else 'live' if s['mute'] is not None else '?'}")
+    print(f"monitoring  {onoff(s['monitoring'])}")
+    print(f"volume      {s['volume']}")
+    print(f"0x2030      {s['reg_2030']}  (gain? unconfirmed)")
+    lt = s["light"]
+    colour = pd200x.COLOURS.get(lt["colour"], f"index {lt['colour']}")
+    print(f"light       {onoff(lt['on'])}, brightness {lt['brightness']}, colour {colour}")
+    for name in ("compressor", "limiter"):
+        c = s[name]
+        thr = "?" if c["threshold_db"] is None else f"{c['threshold_db']:+.1f} dB"
+        print(f"{name:11s} {onoff(c['on'])}, threshold {thr}")
+    if s["eq"] is None:
+        print("eq          not readable (needs firmware 1.2.x)")
+    else:
+        print("eq")
+        for b in s["eq"]:
+            gain = f"{b['gain_db']:+5.1f} dB" if b["type"] not in ("low-pass", "high-pass") else " " * 8
+            print(f"  {b['name']:10s} {onoff(b['on']):3s}  {str(b['type']):11s} {b['freq_hz']:5d} Hz"
+                  f"  {gain}  Q {b['q']:.2f}")
+    if args.raw:
+        print("registers")
+        for a in sorted(regs):
+            print(f"  {a:#06x} = {regs[a]:5d}  ({regs[a]:#06x})")
+
+
+def cmd_set(dev, args):
+    pd200x.set_setting(dev, args.key, args.value)
+    print(f"{args.key} = {args.value}")
+
+
+def cmd_eq(dev, args):
+    name, new = pd200x.set_band(dev, args.band, args.on, args.freq, args.gain, args.q)
+    if new is None:
+        print(f"{name}: nothing to change")
+    else:
+        print(f"{name}: {onoff(new[0])}, {new[2]} Hz, {pd200x.db(new[3]):+.1f} dB, Q {new[4] / 100:.2f}")
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="pd200xctl", description="Maono PD200X control")
+    ap.add_argument("--device", help="hidraw node (default: auto-detect)")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("status", help="show current settings")
+    p.add_argument("--raw", action="store_true", help="also dump all readable registers")
+    p = sub.add_parser("set", help="change one setting")
+    p.add_argument("key", choices=pd200x.SETTINGS)
+    p.add_argument("value")
+    p = sub.add_parser("eq", help="change one EQ band")
+    p.add_argument("band", choices=pd200x.BAND_NAMES)
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--on", dest="on", action="store_true", default=None)
+    g.add_argument("--off", dest="on", action="store_false")
+    p.add_argument("--freq", type=int, help="Hz")
+    p.add_argument("--gain", type=float, help="dB (peak bands)")
+    p.add_argument("--q", type=float)
+    args = ap.parse_args()
+    try:
+        with pd200x.PD200X(args.device) as dev:
+            {"status": cmd_status, "set": cmd_set, "eq": cmd_eq}[args.cmd](dev, args)
+    except (pd200x.DeviceError, ValueError) as e:
+        sys.exit(f"pd200xctl: {e}")
+
+
+if __name__ == "__main__":
+    main()
