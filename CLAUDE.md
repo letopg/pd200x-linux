@@ -50,7 +50,9 @@ DGM20 never uses. These are likely PD200X features.
   DGM20. Confirmed with audio: it was exact digital silence while 0x2022=1, and audio started the
   moment 0x2022→0. Earlier notes that said "unmuted" at scan time were wrong: the mic was muted.
   **0x2034 = level meter**: the mic streams it at ~18 Hz only while live (seen ~1050–1940).
-  **0x2023 = volume knob**, steps of 4 (seen 60–100). The VOL button press sent nothing.
+  **0x2023 = mic volume**: the knob in its default blue-LED mode, steps of 4 (seen 60–100). A short
+  press of VOL switches the knob LED to green (headphone volume, presumably 0x2030; unverified) and
+  sends nothing by itself. Confirmed by the user: the web UI slider on 0x2023 changes mic volume.
 - Maono Link writes (type 3, `FUN_18002a750` in PD200X.dll): 0x2026 and 0x202C are checkboxes
   (0/1), 0x2027/0x202D slider, 0x2035←1 + 0x2025←20 when EQ goes to "custom", 0x2036 light
   on/off, 0x2037 brightness, 0x2038 colour, 0x2039 (another light setting, can't be read),
@@ -157,6 +159,12 @@ DGM20 never uses. These are likely PD200X features.
   external assets). It polls `/api/status` every 2 s; `POST /api/set` and `/api/eq` take JSON. It
   rejects any Host header other than 127.0.0.1/localhost (DNS rebinding) and any non-JSON POST
   (cross-site form posts). The device is opened per request, so a replug recovers on its own.
+- Level meter: a `Meter` thread in pd200x-web holds its own read-only fd (hidraw copies every input
+  report to every open fd, so it doesn't steal replies) and keeps the latest 0x2034 value. The page
+  polls `GET /api/meter` every 100 ms and shows −60..0 dB with a 1.5 s peak hold. It shows
+  "no signal" when the last packet is older than 0.5 s (the mic sends nothing while muted).
+  **0x2034 decodes as dB×10+2000** (looks right: with music it read −44..−52 dB, while the
+  recording measured −44 dBFS RMS earlier).
 
 ## Safety rules
 

@@ -5,13 +5,17 @@
 
 Listens on 127.0.0.1 only. API:
   GET  /api/status                       identity + decoded settings
+  GET  /api/meter                        latest level {"db": float|null, "age": seconds|null}
   POST /api/set  {"key": K, "value": V}  same keys and values as `pd200xctl set`
   POST /api/eq   {"band": B, "on"?, "freq"?, "gain"?, "q"?}
 """
 import argparse
 import json
 import os
+import select
 import sys
+import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
@@ -67,6 +71,13 @@ td input[type=number] { width: 100%; min-width: 0; font: inherit; color: var(--t
   background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; }
 .eqwrap { overflow-x: auto; }
 .note { color: var(--muted); font-size: 12px; margin-top: 8px; }
+.meter { flex: 1; min-width: 0; height: 12px; border-radius: 6px; background: var(--off);
+  position: relative; overflow: hidden; }
+.meter .fill { position: absolute; inset: 0 auto 0 0; width: 0;
+  background: linear-gradient(90deg, #43a047 0%, #43a047 70%, #fdd835 85%, #e53935 100%);
+  background-size: var(--meter-w, 100%) 100%; transition: width 80ms linear; }
+.meter .peak { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--text); left: 0;
+  display: none; }
 </style>
 </head>
 <body>
@@ -78,8 +89,12 @@ td input[type=number] { width: 100%; min-width: 0; font: inherit; color: var(--t
   <h2>Microphone</h2>
   <div class="row"><label class="name">Mute</label><button class="toggle" data-key="mute"></button></div>
   <div class="row"><label class="name">Monitoring</label><button class="toggle" data-key="monitor"></button></div>
-  <div class="row"><label class="name" for="volume">Volume</label>
-    <input type="range" id="volume" min="0" max="100" step="1" data-key="volume"><span class="val" id="volume-v"></span></div>
+  <div class="row"><label class="name" for="mic-volume">Mic volume</label>
+    <input type="range" id="mic-volume" min="0" max="100" step="1" data-key="mic-volume"><span class="val" id="mic-volume-v"></span></div>
+  <div class="row"><label class="name">Level</label>
+    <div class="meter" role="meter" aria-label="Input level" aria-valuemin="-60" aria-valuemax="0">
+      <div class="fill" id="meter-fill"></div><div class="peak" id="meter-peak"></div></div>
+    <span class="val" id="meter-v">–</span></div>
 </section>
 
 <section>
@@ -143,7 +158,7 @@ const fmtDb = v => (v > 0 ? "+" : "") + Number(v).toFixed(1) + " dB";
 function render(s) {
   $("#ident").textContent = `${s.identity.model} · firmware ${s.identity.firmware} · ${s.path}`;
   setToggle("mute", s.mute); setToggle("monitor", s.monitoring);
-  setSlider("volume", s.volume);
+  setSlider("mic-volume", s.mic_volume);
   setToggle("light", s.light.on); setSlider("brightness", s.light.brightness);
   document.querySelectorAll(".swatch").forEach(w => w.classList.toggle("sel", +w.dataset.idx === s.light.colour));
   setToggle("compressor", s.compressor.on); setSlider("compressor-threshold", s.compressor.threshold_db, fmtDb);
@@ -207,15 +222,73 @@ $("#eq").addEventListener("change", e => {
   change("/api/eq", {band: el.closest("tr").dataset.band, [el.dataset.field]: Number(el.value)});
 });
 
-refresh(); setInterval(refresh, 2000);
+// level meter: approx dBFS from the mic's 0x2034 packets, shown on a -60..0 dB scale
+const FLOOR = -60;
+let peak = FLOOR, peakAt = 0;
+const pct = d => Math.max(0, Math.min(100, (d - FLOOR) / -FLOOR * 100));
+async function meter() {
+  if (document.hidden) return;
+  let m;
+  try { m = await api("/api/meter"); } catch (e) { return; }
+  const fill = $("#meter-fill"), pk = $("#meter-peak"), meterEl = fill.parentElement;
+  meterEl.style.setProperty("--meter-w", meterEl.clientWidth + "px");
+  if (m.db === null || m.age === null || m.age > 0.5) {
+    fill.style.width = "0"; pk.style.display = "none"; $("#meter-v").textContent = "no signal";
+    meterEl.setAttribute("aria-valuenow", FLOOR); peak = FLOOR; return;
+  }
+  const now = performance.now();
+  if (m.db >= peak || now - peakAt > 1500) { peak = m.db; peakAt = now; }
+  fill.style.width = pct(m.db) + "%";
+  pk.style.display = "block"; pk.style.left = `calc(${pct(peak)}% - 2px)`;
+  $("#meter-v").textContent = m.db.toFixed(1) + " dB";
+  meterEl.setAttribute("aria-valuenow", m.db);
+}
+
+refresh(); setInterval(refresh, 2000); setInterval(meter, 100);
 </script>
 </body>
 </html>
 """
 
 
+class Meter(threading.Thread):
+    """Keeps its own fd open and records the latest 0x2034 level packet.
+
+    hidraw hands every input report to every open fd, so this doesn't take replies away from
+    request transactions. Reopens the device after a replug.
+    """
+
+    def __init__(self, path=None):
+        super().__init__(daemon=True)
+        self.path, self.db, self.when = path, None, None
+
+    def run(self):
+        while True:
+            try:
+                fd = os.open(self.path or pd200x.find_node(), os.O_RDONLY)
+            except (OSError, pd200x.DeviceError):
+                time.sleep(1)
+                continue
+            try:
+                while True:
+                    if select.select([fd], [], [], 1.0)[0]:
+                        p = pd200x.parse(os.read(fd, 64))
+                        if p and p[0] == pd200x.T_WRITE and p[1][:1] == [pd200x.METER] and len(p[1]) > 1:
+                            self.db, self.when = pd200x.db(p[1][1]), time.monotonic()
+            except OSError:
+                pass
+            finally:
+                os.close(fd)
+            time.sleep(1)
+
+    def snapshot(self):
+        age = None if self.when is None else round(time.monotonic() - self.when, 2)
+        return {"db": self.db, "age": age}
+
+
 class Handler(BaseHTTPRequestHandler):
     device = None  # --device override
+    meter = None
 
     def log_message(self, fmt, *args):
         pass
@@ -226,8 +299,11 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(data)
+        try:
+            self.end_headers()
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # browser went away mid-reply (tab closed, page reloaded)
 
     def _host_ok(self):
         host = (self.headers.get("Host") or "").rsplit(":", 1)[0]
@@ -254,6 +330,8 @@ class Handler(BaseHTTPRequestHandler):
                 s["path"] = dev.path
                 return s
             return self._with_device(status)
+        if self.path == "/api/meter":
+            return self._send(200, self.meter.snapshot())
         self._send(404, {"error": "not found"})
 
     def do_POST(self):
@@ -279,6 +357,8 @@ def main():
     ap.add_argument("--device", help="hidraw node (default: auto-detect)")
     args = ap.parse_args()
     Handler.device = args.device
+    Handler.meter = Meter(args.device)
+    Handler.meter.start()
     srv = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     print(f"pd200x-web: http://127.0.0.1:{args.port}/  (Ctrl-C to stop)")
     try:

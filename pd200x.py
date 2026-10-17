@@ -15,7 +15,8 @@ from contextlib import contextmanager
 VID, PID = 0x352F, 0x0104
 REPORT = 0x4B
 T_ACK, T_WRITE, T_READ, T_RANGE = 2, 3, 4, 6
-METER = 0x2034  # streamed by the mic while live; never a reply
+METER = 0x2034  # streamed by the mic (~18 Hz) while live; never a reply. Same dB x10 + 2000
+                # encoding as everything else, as far as we can tell (1000 = -100 dB floor).
 
 REG_FIRST, REG_LAST = 0x2000, 0x2089  # readable settings block on fw 1.2.9
 
@@ -196,7 +197,7 @@ def parse_colour(v):
 SETTINGS = {
     "mute": (0x2022, lambda v: int(parse_bool(v))),
     "monitor": (0x2031, lambda v: 2000 if parse_bool(v) else 3000),
-    "volume": (0x2023, parse_int(0, 100)),
+    "mic-volume": (0x2023, parse_int(0, 100)),  # knob in blue-LED mode
     "light": (0x2036, lambda v: int(parse_bool(v))),
     "brightness": (0x2037, parse_int(0, 100)),
     "colour": (0x2038, parse_colour),
@@ -254,7 +255,7 @@ def decode(regs):
     s = {
         "mute": None if g(0x2022) is None else bool(g(0x2022)),
         "monitoring": {2000: True, 3000: False}.get(g(0x2031)),
-        "volume": g(0x2023),
+        "mic_volume": g(0x2023),
         "reg_2030": g(0x2030),
         "light": {"on": None if g(0x2036) is None else bool(g(0x2036)),
                   "brightness": g(0x2037), "colour": g(0x2038)},
