@@ -32,6 +32,10 @@ def onoff(v):
     return "?" if v is None else ("on" if v else "off")
 
 
+def unknown(v, fmt="{}"):
+    return "?" if v is None else fmt.format(v)
+
+
 def cmd_status(dev, args):
     ident = dev.identity()
     regs = dev.read_block(pd200x.REG_FIRST, pd200x.REG_LAST)
@@ -39,17 +43,17 @@ def cmd_status(dev, args):
     print(f"{ident['model']}  firmware {ident['firmware']}  serial {ident['serial']}  ({dev.path})")
     print(f"mute        {'muted' if s['mute'] else 'live' if s['mute'] is not None else '?'}")
     print(f"monitoring  {onoff(s['monitoring'])}")
-    print(f"mic volume  {s['mic_volume']}  (knob, green LED)")
-    print(f"headphones  {s['headphone_volume']}  (knob, blue LED)")
+    print(f"mic volume  {unknown(s['mic_volume'])}  (knob, green LED)")
+    print(f"headphones  {unknown(s['headphone_volume'])}  (knob, blue LED)")
     lt = s["light"]
-    colour = pd200x.COLOURS.get(lt["colour"], f"index {lt['colour']}")
-    print(f"light       {onoff(lt['on'])}, brightness {lt['brightness']}, colour {colour}")
+    colour = "?" if lt["colour"] is None else pd200x.COLOURS.get(lt["colour"], f"index {lt['colour']}")
+    print(f"light       {onoff(lt['on'])}, brightness {unknown(lt['brightness'])}, colour {colour}")
     for name in ("compressor", "limiter"):
         c = s[name]
-        thr = "?" if c["threshold_db"] is None else f"{c['threshold_db']:+.1f} dB"
+        thr = unknown(c["threshold_db"], "{:+.1f} dB")
         print(f"{name:11s} {onoff(c['on'])}, threshold {thr}")
     nc = s["noise_cancel"]
-    print(f"noise cancel {onoff(nc['on'])}, level {'?' if nc['level'] is None else nc['level']}")
+    print(f"noise cancel {onoff(nc['on'])}, level {unknown(nc['level'])}")
     if s["eq"] is None:
         print("eq          not readable (needs firmware 1.2.x)")
     else:

@@ -153,12 +153,20 @@ async function api(path, body) {
 
 function setToggle(key, on) {
   const b = document.querySelector(`button[data-key="${key}"]`);
-  b.classList.toggle("on", !!on); b.textContent = on ? "on" : "off"; b.dataset.on = on ? "1" : "0";
+  // null means the register didn't read back: show "?" rather than guessing "off"
+  const unknown = on === null || on === undefined;
+  b.classList.toggle("on", !!on); b.textContent = unknown ? "?" : on ? "on" : "off";
+  b.dataset.on = unknown ? "" : on ? "1" : "0";
+  b.title = unknown ? "The mic didn't report this setting" : "";
 }
 function setSlider(key, v, fmt) {
-  const el = document.getElementById(key); if (v === null || v === undefined) return;
+  const el = document.getElementById(key), label = document.getElementById(key + "-v");
+  // null means the register didn't read back: show "?" rather than the last value
+  if (v === null || v === undefined) {
+    label.textContent = "?"; label.title = "The mic didn't report this setting"; return;
+  }
   if (document.activeElement !== el) el.value = v;
-  document.getElementById(key + "-v").textContent = fmt ? fmt(v) : v;
+  label.textContent = fmt ? fmt(v) : v; label.title = "";
 }
 const fmtDb = v => (v > 0 ? "+" : "") + Number(v).toFixed(1) + " dB";
 
